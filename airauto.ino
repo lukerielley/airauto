@@ -1,7 +1,6 @@
 #include <LCD5110_Graph.h>
 
-// CONFIGURATION VARIABLES
-
+// The PINS the 5110 LCD is connected to
 const int LCD_SCK = 8;
 const int LCD_MOSI = 9;
 const int LCD_DC = 10;
@@ -11,8 +10,8 @@ const int LCD_CS = 12;
 const int RELAY_INFLATE = 3;
 const int RELAY_DEFLATE = 4;
 
+// The analog pin of the pressure transducer
 const uint8_t TRANSDUCER_PIN = A0;
-
 // The amount of PSI that are represented by each volt of the transducer
 const float psiPerVolt = 37.5;
 // How many PSI per BAR (to allow unit conversion)
@@ -22,7 +21,7 @@ const int initialInflationTime = 1000;
 // The time duration (in MS) of the initial deflation
 const int initialDeflationTime = 1000;
 // The minimum PSI that we require to determine that a tyre is connected
-const float tyreConnectionMinPsi = 8.0;
+const float tyreConnectionMinPsi = 3.0;
 
 LCD5110 myGLCD(LCD_SCK, LCD_MOSI, LCD_DC, LCD_RST, LCD_CS);
 
@@ -37,6 +36,8 @@ boolean isInflating = false;
 boolean isDeflating = false;
 // Indicates that the unit has been told by the user that they want to achieve the target air pressure. It has been 'switched on'.
 boolean isSwitchedOn = false;
+// Indicates that an inflation/deflation session has started
+boolean hasActiveSession = false;
 // Indicates that the unit detcts that it is connected to a tyre. This is generally done by detecting a pressure above a certain level.
 boolean hasTyreConnected = false;
 // Indicates that inflating/deflating was attempted, but failed. (The pressure didn't change, indicating a problem with the compressor, a connection, or the tyre)
@@ -47,6 +48,8 @@ boolean isPressureReadingErratic = false;
 boolean isAtSetPressure = false;
 // The target set pressure of the tyre
 float targetPressure = 0;
+// An collection of the pressure readings of a session
+float sessionReadings[] = {};
 
 void setup()
 {
@@ -74,6 +77,7 @@ float getSensorEqualisedVoltage()
   return voltage - 0.5;
 }
 
+// Gets the 
 float getCurrentPsi()
 {
   return getSensorEqualisedVoltage() * psiPerVolt;
@@ -96,11 +100,10 @@ void debugSensor()
   delay(500);
 }
 
-void error()
+void operationError()
 {
-
   myGLCD.clrScr();
-  myGLCD.print("ERROR!", CENTER, 20);
+  myGLCD.print("ERROR!", CENTER, 10);
   myGLCD.update();
 
   for (int i = 0; i < 5; i++)
@@ -114,6 +117,7 @@ void error()
 
 void inflate(int time)
 {
+  isInflating = true;
   Serial.println(F("Opening inflation solenoid"));
   digitalWrite(RELAY_INFLATE, LOW);
   Serial.println(F("Inflating"));
@@ -121,10 +125,12 @@ void inflate(int time)
   Serial.println(F("Closing inflation solenoid"));
   digitalWrite(RELAY_INFLATE, HIGH);
   delay(500);
+  isInflating = false;
 }
 
 void deflate(int time)
 {
+  isDeflating = true;
   Serial.println(F("Opening deflation solenoid"));
   digitalWrite(RELAY_DEFLATE, LOW);
   Serial.println(F("Deflating"));
@@ -132,77 +138,91 @@ void deflate(int time)
   Serial.println(F("Closing deflation solenoid"));
   digitalWrite(RELAY_INFLATE, HIGH);
   delay(500);
+  isDeflating = false;
 }
+
+void targetPressureAchieved() {
+  // TODO: Play beeps?
+  // TODO: Flash message on screen?
+}
+
+void sessionStart() {
+  hasActiveSession = true;
+}
+
 
 void loop()
 {
 
-  // We are able to attempt to reach the target pressure
-  if (isSwitchedOn)
+  if (!isSwitchedOn) {
+    return;
+  }
+
+  // We are able to attempt to reach the target pressure with no issues
+  if (inflationError || isPressureReadingErratic) {
+    operationError();
+  }
+
+  // Read the current pressure
+  float currentPsi = getCurrentPsi();
+
+  // Determine if we have a tyre connected based on the pressure reading
+  hasTyreConnected = (currentPsi > tyreConnectionMinPsi );
+  
+  if (!hasTyreConnected)
   {
-
-    if (!inflationError)
-    {
-
-      if (!isPressureReadingErratic)
-      {
-
-        float currentPsi = getCurrentPsi();
-        Serial.println(F("Current PST is:"));
-        Serial.println(currentPsi);
-        hasTyreConnected = (currentPsi > tyreConnectionMinPsi);
-
-        if (hasTyreConnected)
-        {
-
-          if (!isAtSetPressure)
-          {
-
-            // positive number means we need to inflate (eg target of 38 and current of 22 gives us 16)
-            float adjustmentRequired = (targetPressure - currentPsi);
-
-            if (adjustmentRequired > accuracyTolerance)
-            {
-              // TODO: Add logic to adjust the inflation time based on an estimation from previous inflation runs for this connection
-              float inflationTime = initialInflationTime;
-              inflate(inflationTime);
-            }
-            else if (adjustmentRequired < (-1 * accuracyTolerance))
-            {
-              // TODO: Add logic to adjust the inflation time based on an estimation from previous deflation runs for this connection
-              float deflationTime = initialDeflationTime;
-              deflate(deflationTime);
-            }
-            else
-            {
-              isAtSetPressure = true;
-            }
-
-          }
-          else
-          {
-            Serial.println(F("Tyre is at set pressure"));
-          }
-        }
-        else
-        {
-          Serial.println(F("No tyre connection was detected"));
-        }
-      }
-      else
-      {
-        Serial.println(F("Pressure reading is erratic. MALFUNCTION"));
-      }
+    // If there is no tyre connected, but we have an active session, then the connection to the tyre has been lost before the target pressure was reached
+    if (hasActiveSession) {
+      // Cancel the active session
+      hasActiveSession = false;
     }
-    else
-    {
-      Serial.println(F("There is an inflation error"));
-    }
+
+    Serial.println(F("No tyre connection was detected"));
+    return;
+  }
+
+  if (isAtSetPressure)
+  {
+    Serial.println(F("Tyre is at set pressure"));
+    return;
+  }
+
+  // positive number means we need to inflate (eg target of 38 and current of 22 gives us 16)
+  float adjustmentRequired = (targetPressure - currentPsi);
+  
+  // If there is no active session but we should start one, then let's do it
+  if (!hasActiveSession && (adjustmentRequired > 0.5 || adjustmentRequired < -0.5)) {
+    sessionStart();
+  }
+
+  if (adjustmentRequired > accuracyTolerance)
+  {
+    // TODO: Add logic to adjust the inflation time based on an estimation from previous inflation runs for this connection
+    float inflationTime = initialInflationTime;
+    hasActiveSession = true;
+    inflate(inflationTime);
+  }
+  else if (adjustmentRequired < (-1 * accuracyTolerance))
+  {
+    // TODO: Add logic to adjust the inflation time based on an estimation from previous deflation runs for this connection
+    float deflationTime = initialDeflationTime;
+    hasActiveSession = true;
+    deflate(deflationTime);
   }
   else
   {
-    Serial.println(F("AirAuto is not switched on"));
+    // The target pressure has been reached
+    if (hasActiveSession) {
+      targetPressureAchieved();
+      hasActiveSession = false;
+    }
+    
+    isAtSetPressure = true;
   }
+
+  myGLCD.update();
+
+  delay(100);
 
   // debugSensor();
 }
