@@ -1,5 +1,7 @@
 #include <LCD5110_Graph.h>
 
+// Mega2560 Interrupt Pins = 2, 3, 18, 19, 20, 21
+
 // The PINS the 5110 LCD is connected to
 const int DIG_LCD_SCK = 8;
 const int DIG_LCD_MOSI = 9;
@@ -7,8 +9,15 @@ const int DIG_LCD_DC = 10;
 const int DIG_LCD_RST = 11;
 const int DIG_LCD_CS = 12;
 
-const int RELAY_INFLATE = 3;
-const int RELAY_DEFLATE = 4;
+const int RELAY_INFLATE = 4;
+const int RELAY_DEFLATE = 5;
+
+const byte PIN_BUTTON_A = 2;
+const byte PIN_BUTTON_B = 3;
+
+// The states for the buttons. These are volatile as they are modified by an interrupt
+volatile byte BTN_A_STATE = false;
+volatile byte BTN_B_STATE = false;
 
 // The analog pin of the pressure transducer
 const uint8_t TRANSDUCER_PIN = A0;
@@ -60,9 +69,29 @@ void setup()
   myGLCD.InitLCD();
   myGLCD.setFont(SmallFont);
 
-  // Configure the I/O status of the pins we will use to control the solenoid valves
+  // Configure the I/O status of the pins we will use
   pinMode(RELAY_INFLATE, OUTPUT);
   pinMode(RELAY_DEFLATE, OUTPUT);
+  pinMode(PIN_BUTTON_A, INPUT_PULLUP);
+  pinMode(PIN_BUTTON_B, INPUT_PULLUP);
+
+  // Register interrupt event handlers
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_A), buttonAClicked, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_B), buttonBClicked, FALLING);
+}
+
+/*
+  Interrupt event handler for button A
+*/
+void buttonAClicked() {
+  BTN_A_STATE = true;
+}
+
+/*
+  Interrupt event handler for button B
+*/
+void buttonBClicked() {
+  BTN_B_STATE = true;
 }
 
 /*
