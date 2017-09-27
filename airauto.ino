@@ -1,11 +1,11 @@
 #include <LCD5110_Graph.h>
 
 // The PINS the 5110 LCD is connected to
-const int LCD_SCK = 8;
-const int LCD_MOSI = 9;
-const int LCD_DC = 10;
-const int LCD_RST = 11;
-const int LCD_CS = 12;
+const int DIG_LCD_SCK = 8;
+const int DIG_LCD_MOSI = 9;
+const int DIG_LCD_DC = 10;
+const int DIG_LCD_RST = 11;
+const int DIG_LCD_CS = 12;
 
 const int RELAY_INFLATE = 3;
 const int RELAY_DEFLATE = 4;
@@ -23,7 +23,7 @@ const int initialDeflationTime = 1000;
 // The minimum PSI that we require to determine that a tyre is connected
 const float tyreConnectionMinPsi = 3.0;
 
-LCD5110 myGLCD(LCD_SCK, LCD_MOSI, LCD_DC, LCD_RST, LCD_CS);
+LCD5110 myGLCD(DIG_LCD_SCK, DIG_LCD_MOSI, DIG_LCD_DC, DIG_LCD_RST, DIG_LCD_CS);
 
 extern uint8_t SmallFont[];
 extern uint8_t BigNumbers[];
