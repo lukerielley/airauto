@@ -11,15 +11,17 @@ const int DIG_LCD_DC = 10;
 const int DIG_LCD_RST = 11;
 const int DIG_LCD_CS = 12;
 
-const int RELAY_INFLATE = 4;
-const int RELAY_DEFLATE = 5;
+const int RELAY_INFLATE = 6;
+const int RELAY_DEFLATE = 7;
 
 const byte PIN_BUTTON_A = 2;
 const byte PIN_BUTTON_B = 3;
+const byte PIN_BUTTON_C = 4;
 
 // The states for the buttons. These are volatile as they are modified by an interrupt
-volatile byte BTN_A_STATE = false;
-volatile byte BTN_B_STATE = false;
+volatile int BTN_A_STATE = 0;
+volatile int BTN_B_STATE = 0;
+volatile int BTN_C_STATE = 0;
 
 // The analog pin of the pressure transducer
 const uint8_t TRANSDUCER_PIN = A0;
@@ -28,9 +30,9 @@ const float psiPerVolt = 37.5;
 // How many PSI per BAR (to allow unit conversion)
 const float psiPerBar = 14.5038;
 // The time duration (in MS) of the initial inflation
-const int initialInflationTime = 3000;
+const int initialInflationTime = 1000;
 // The time duration (in MS) of the initial deflation
-const int initialDeflationTime = 3000;
+const int initialDeflationTime = 1000;
 // The minimum PSI that we require to determine that a tyre is connected
 const float tyreConnectionMinPsi = 3.0;
 
@@ -59,8 +61,10 @@ boolean isPressureReadingErratic = false;
 boolean isAtSetPressure = false;
 // The target set pressure of the tyre
 float targetPressure = 38;
-// An collection of the pressure readings of a session
-float sessionReadings[] = {};
+// An collection of the pressure readings of a session, maximum of 20
+float sessionReadings[20] = {};
+// A record of how many inflation/deflation cycles were made
+int sessionCycles = 0;
 
 void setup()
 {
@@ -80,29 +84,38 @@ void setup()
   pinMode(RELAY_DEFLATE, OUTPUT);
 
   // Set default states (both air solenoids closed
-  digitalWrite(RELAY_INFLATE, HIGH);
-  digitalWrite(RELAY_DEFLATE, HIGH);
+  closeValve(RELAY_INFLATE);
+  closeValve(RELAY_DEFLATE);
   
   pinMode(PIN_BUTTON_A, INPUT_PULLUP);
   pinMode(PIN_BUTTON_B, INPUT_PULLUP);
+  pinMode(PIN_BUTTON_C, INPUT_PULLUP);
 
   // Register interrupt event handlers
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_A), buttonAClicked, FALLING);
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_B), buttonBClicked, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_A), buttonAClicked, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_B), buttonBClicked, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_C), buttonCClicked, CHANGE);
 }
 
 /*
   Interrupt event handler for button A
 */
 void buttonAClicked() {
-  BTN_A_STATE = true;
+  BTN_A_STATE = digitalRead(PIN_BUTTON_A);
+  Serial.println(F("BUTTON A CHANGED"));
 }
 
 /*
   Interrupt event handler for button B
 */
 void buttonBClicked() {
-  BTN_B_STATE = true;
+  BTN_B_STATE = digitalRead(PIN_BUTTON_B);
+  Serial.println(F("BUTTON B CHANGED"));
+}
+
+void buttonCClicked() {
+  BTN_C_STATE = digitalRead(PIN_BUTTON_C);
+  Serial.println(F("BUTTON C CHANGED"));
 }
 
 /*
@@ -153,8 +166,12 @@ void debugSensor()
   delay(500);
 }
 
-void operationError()
+void operationError(int errorCode)
 {
+  Serial.println(F("ERROR!!!!!"));
+  Serial.print(errorCode);
+  hasActiveSession = false;
+  
   myGLCD.clrScr();
   myGLCD.print("ERROR!", CENTER, 10);
   myGLCD.update();
@@ -168,15 +185,31 @@ void operationError()
   }
 }
 
+void openValve(int valveId) {
+  if (IS_DEVELOPMENT_MODE) {
+    digitalWrite(valveId, HIGH);
+  } else {
+    digitalWrite(valveId, LOW);
+  }
+}
+
+void closeValve(int valveId) {
+  if (IS_DEVELOPMENT_MODE) {
+    digitalWrite(valveId, LOW);
+  } else {
+    digitalWrite(valveId, HIGH);
+  }
+}
+
 void inflate(int time)
 {
   isInflating = true;
   Serial.println(F("Opening inflation solenoid"));
-  digitalWrite(RELAY_INFLATE, LOW);
+  openValve(RELAY_INFLATE);
   Serial.println(F("Inflating"));
   delay(time);
   Serial.println(F("Closing inflation solenoid"));
-  digitalWrite(RELAY_INFLATE, HIGH);
+  closeValve(RELAY_INFLATE);
   delay(1000);
   isInflating = false;
 }
@@ -185,17 +218,18 @@ void deflate(int time)
 {
   isDeflating = true;
   Serial.println(F("Opening deflation solenoid"));
-  digitalWrite(RELAY_DEFLATE, LOW);
+  openValve(RELAY_DEFLATE);
   Serial.println(F("Deflating"));
   delay(time);
   Serial.println(F("Closing deflation solenoid"));
-  digitalWrite(RELAY_DEFLATE, HIGH);
+  closeValve(RELAY_DEFLATE);
   delay(1000);
   isDeflating = false;
 }
 
 void targetPressureAchieved() {
     hasActiveSession = false;
+    resetSessionReadings();
     Serial.println(F("SESSION Complete: Target pressure achieved."));
   // TODO: Play beeps?
   // TODO: Flash message on screen?
@@ -203,9 +237,37 @@ void targetPressureAchieved() {
 
 void sessionStart() {
   Serial.println(F("Session starting!!"));
+  resetSessionReadings();
   hasActiveSession = true;
 }
 
+void resetSessionReadings() {
+  for (int count=0;count<20;count++) {
+    sessionReadings[count] = -1;
+  }
+}
+
+void addSessionReading(float value) {
+  Serial.print(F("Adding session reading of:"));
+  Serial.print(value);
+  Serial.println();
+  sessionReadings[sessionCycles] = value;
+
+  String outputReadings = "";
+  for (int count=0;count<20;count++) {
+    if (sessionReadings[count] != -1) {
+      outputReadings = outputReadings + sessionReadings[count] + ", ";
+    }
+  }
+
+  Serial.println(outputReadings);
+  
+  if (sessionCycles < 20) {
+    sessionCycles++;
+  } else {
+    operationError(1);
+  }
+}
 
 void loop()
 {
@@ -220,11 +282,11 @@ void loop()
     return;
   }
 
-  // We are able to attempt to reach the target pressure with no issues
-  if (inflationError || isPressureReadingErratic) {
-    Serial.println(F("Something is wrong, we can't attempt anything :("));
-    operationError();
-  }
+//  // We are able to attempt to reach the target pressure with no issues
+//  if (inflationError || isPressureReadingErratic) {
+//    Serial.println(F("Something is wrong, we can't attempt anything :("));
+//    operationError();
+//  }
 
   // Determine if we have a tyre connected based on the pressure reading
   boolean detectTyre = (currentPsi > tyreConnectionMinPsi );
@@ -252,6 +314,10 @@ void loop()
   Serial.print(F("TARGET PSI: "));
   Serial.print(targetPressure);
   Serial.println();
+
+  Serial.print(F("ADJUSTMENT PSI: "));
+  Serial.print(adjustmentRequired);
+  Serial.println();
   
   // If there is no active session but we should start one, then let's do it
   if (!hasActiveSession && (adjustmentRequired > 0.5 || adjustmentRequired < -0.5)) {
@@ -264,6 +330,7 @@ void loop()
     float inflationTime = initialInflationTime;
     hasActiveSession = true;
     Serial.print(F("The required"));
+    addSessionReading(currentPsi);
     inflate(inflationTime);
   }
   else if (adjustmentRequired < (-1 * accuracyTolerance))
@@ -271,6 +338,7 @@ void loop()
     // TODO: Add logic to adjust the inflation time based on an estimation from previous deflation runs for this connection
     float deflationTime = initialDeflationTime;
     hasActiveSession = true;
+    addSessionReading(currentPsi);
     deflate(deflationTime);
   }
   else
