@@ -2,6 +2,30 @@
 
 const bool IS_DEVELOPMENT_MODE = true;
 
+class Valve {
+  int valvePinId;
+  public:
+  Valve(int connectionPin) {
+    valvePinId = connectionPin;
+  }
+
+  void Open() {
+    if (IS_DEVELOPMENT_MODE) {
+      digitalWrite(valvePinId, HIGH);
+    } else {
+      digitalWrite(valvePinId, LOW);
+    }
+  }
+
+  void Close() {
+  if (IS_DEVELOPMENT_MODE) {
+    digitalWrite(valvePinId, LOW);
+  } else {
+    digitalWrite(valvePinId, HIGH);
+  }
+  }
+};
+
 // Mega2560 Interrupt Pins = 2, 3, 18, 19, 20, 21
 
 // The PINS the 5110 LCD is connected to
@@ -13,6 +37,9 @@ const int DIG_LCD_CS = 12;
 
 const int RELAY_INFLATE = 6;
 const int RELAY_DEFLATE = 7;
+
+Valve inflationValve(RELAY_INFLATE);
+Valve deflationValve(RELAY_DEFLATE);
 
 const byte PIN_BUTTON_A = 2;
 const byte PIN_BUTTON_B = 3;
@@ -84,8 +111,8 @@ void setup()
   pinMode(RELAY_DEFLATE, OUTPUT);
 
   // Set default states (both air solenoids closed
-  closeValve(RELAY_INFLATE);
-  closeValve(RELAY_DEFLATE);
+  inflationValve.Close();
+  deflationValve.Close();
   
   pinMode(PIN_BUTTON_A, INPUT_PULLUP);
   pinMode(PIN_BUTTON_B, INPUT_PULLUP);
@@ -185,31 +212,15 @@ void operationError(int errorCode)
   }
 }
 
-void openValve(int valveId) {
-  if (IS_DEVELOPMENT_MODE) {
-    digitalWrite(valveId, HIGH);
-  } else {
-    digitalWrite(valveId, LOW);
-  }
-}
-
-void closeValve(int valveId) {
-  if (IS_DEVELOPMENT_MODE) {
-    digitalWrite(valveId, LOW);
-  } else {
-    digitalWrite(valveId, HIGH);
-  }
-}
-
 void inflate(int time)
 {
   isInflating = true;
   Serial.println(F("Opening inflation solenoid"));
-  openValve(RELAY_INFLATE);
+  inflationValve.Open();
   Serial.println(F("Inflating"));
   delay(time);
   Serial.println(F("Closing inflation solenoid"));
-  closeValve(RELAY_INFLATE);
+  inflationValve.Close();
   delay(1000);
   isInflating = false;
 }
@@ -218,11 +229,11 @@ void deflate(int time)
 {
   isDeflating = true;
   Serial.println(F("Opening deflation solenoid"));
-  openValve(RELAY_DEFLATE);
+  deflationValve.Open();
   Serial.println(F("Deflating"));
   delay(time);
   Serial.println(F("Closing deflation solenoid"));
-  closeValve(RELAY_DEFLATE);
+  deflationValve.Close();
   delay(1000);
   isDeflating = false;
 }
