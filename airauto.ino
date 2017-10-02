@@ -1,5 +1,7 @@
 #include <LCD5110_Graph.h>
 
+const bool IS_DEVELOPMENT_MODE = true;
+
 // Mega2560 Interrupt Pins = 2, 3, 18, 19, 20, 21
 
 // The PINS the 5110 LCD is connected to
@@ -26,9 +28,9 @@ const float psiPerVolt = 37.5;
 // How many PSI per BAR (to allow unit conversion)
 const float psiPerBar = 14.5038;
 // The time duration (in MS) of the initial inflation
-const int initialInflationTime = 1000;
+const int initialInflationTime = 3000;
 // The time duration (in MS) of the initial deflation
-const int initialDeflationTime = 1000;
+const int initialDeflationTime = 3000;
 // The minimum PSI that we require to determine that a tyre is connected
 const float tyreConnectionMinPsi = 3.0;
 
@@ -44,7 +46,7 @@ boolean isInflating = false;
 // Indicates that the unit is deflating the tyre to reach the desired pressure, and that the ventilation valve is open
 boolean isDeflating = false;
 // Indicates that the unit has been told by the user that they want to achieve the target air pressure. It has been 'switched on'.
-boolean isSwitchedOn = false;
+boolean isSwitchedOn = true;
 // Indicates that an inflation/deflation session has started
 boolean hasActiveSession = false;
 // Indicates that the unit detcts that it is connected to a tyre. This is generally done by detecting a pressure above a certain level.
@@ -56,7 +58,7 @@ boolean isPressureReadingErratic = false;
 // Indicates that the tyre is at the set pressure
 boolean isAtSetPressure = false;
 // The target set pressure of the tyre
-float targetPressure = 0;
+float targetPressure = 38;
 // An collection of the pressure readings of a session
 float sessionReadings[] = {};
 
@@ -65,6 +67,10 @@ void setup()
   // Open Serial connection for debug output
   Serial.begin(9600);
 
+  if (IS_DEVELOPMENT_MODE) {
+    Serial.println("DEVELOPMENT MODE");
+  }
+
   // Initialise the LCD screen
   myGLCD.InitLCD();
   myGLCD.setFont(SmallFont);
@@ -72,6 +78,11 @@ void setup()
   // Configure the I/O status of the pins we will use
   pinMode(RELAY_INFLATE, OUTPUT);
   pinMode(RELAY_DEFLATE, OUTPUT);
+
+  // Set default states (both air solenoids closed
+  digitalWrite(RELAY_INFLATE, HIGH);
+  digitalWrite(RELAY_DEFLATE, HIGH);
+  
   pinMode(PIN_BUTTON_A, INPUT_PULLUP);
   pinMode(PIN_BUTTON_B, INPUT_PULLUP);
 
@@ -100,16 +111,29 @@ void buttonBClicked() {
 */
 float getSensorEqualisedVoltage()
 {
-  int sensorValue = analogRead(TRANSDUCER_PIN);
-  Serial.println(F("sensorValue"));
-  float voltage = sensorValue * (5.0 / 1023.0);
-  return voltage - 0.5;
+  if (IS_DEVELOPMENT_MODE) {
+    /* In development mode we use a potentiometer to allow us to 
+    simulate tyre pressure readings between 0.5-2.5 volts (0-75 PSI) */
+    int sensorValue = analogRead(TRANSDUCER_PIN);
+    float val = ((1023 - sensorValue) * (1.5 / 1023));
+    return val;
+  } else {
+    int sensorValue = analogRead(TRANSDUCER_PIN);
+    float voltage = sensorValue * (5.0 / 1023.0);
+    return voltage - 0.5;
+  }
 }
 
-// Gets the 
+/*
+  Get the current PSI. This is the sensor voltage multiplied by the PSI per volt
+*/
 float getCurrentPsi()
 {
-  return getSensorEqualisedVoltage() * psiPerVolt;
+  float psi = getSensorEqualisedVoltage() * psiPerVolt;
+  Serial.print(F("ACTUAL PSI: "));
+  Serial.print(psi);
+  Serial.println();
+  return psi;
 }
 
 void debugSensor()
@@ -153,7 +177,7 @@ void inflate(int time)
   delay(time);
   Serial.println(F("Closing inflation solenoid"));
   digitalWrite(RELAY_INFLATE, HIGH);
-  delay(500);
+  delay(1000);
   isInflating = false;
 }
 
@@ -165,59 +189,69 @@ void deflate(int time)
   Serial.println(F("Deflating"));
   delay(time);
   Serial.println(F("Closing deflation solenoid"));
-  digitalWrite(RELAY_INFLATE, HIGH);
-  delay(500);
+  digitalWrite(RELAY_DEFLATE, HIGH);
+  delay(1000);
   isDeflating = false;
 }
 
 void targetPressureAchieved() {
+    hasActiveSession = false;
+    Serial.println(F("SESSION Complete: Target pressure achieved."));
   // TODO: Play beeps?
   // TODO: Flash message on screen?
 }
 
 void sessionStart() {
+  Serial.println(F("Session starting!!"));
   hasActiveSession = true;
 }
 
 
 void loop()
 {
+  Serial.println(F("---------------------------------------------------------"));
+  delay(500);
+
+  // Read the current pressure
+  float currentPsi = getCurrentPsi();
 
   if (!isSwitchedOn) {
+    Serial.println(F("Unit is not switched on, let's do nothing for now"));
     return;
   }
 
   // We are able to attempt to reach the target pressure with no issues
   if (inflationError || isPressureReadingErratic) {
+    Serial.println(F("Something is wrong, we can't attempt anything :("));
     operationError();
   }
 
-  // Read the current pressure
-  float currentPsi = getCurrentPsi();
-
   // Determine if we have a tyre connected based on the pressure reading
-  hasTyreConnected = (currentPsi > tyreConnectionMinPsi );
-  
-  if (!hasTyreConnected)
-  {
-    // If there is no tyre connected, but we have an active session, then the connection to the tyre has been lost before the target pressure was reached
+  boolean detectTyre = (currentPsi > tyreConnectionMinPsi );
+
+  Serial.print(F("TYRE DETECTION: "));
+  Serial.print(detectTyre);
+  Serial.println();
+
+  // hasTyreConnected
+
+  if (!detectTyre) {
+    Serial.println(F("No tyre detcted"));
+    // No tyre detected
     if (hasActiveSession) {
-      // Cancel the active session
+      // Tyre has been disconnected! Let's end the session
       hasActiveSession = false;
+      Serial.println(F("SESSION END!! There was an active session but the tyre was disconnected!"));
     }
-
-    Serial.println(F("No tyre connection was detected"));
-    return;
-  }
-
-  if (isAtSetPressure)
-  {
-    Serial.println(F("Tyre is at set pressure"));
     return;
   }
 
   // positive number means we need to inflate (eg target of 38 and current of 22 gives us 16)
   float adjustmentRequired = (targetPressure - currentPsi);
+
+  Serial.print(F("TARGET PSI: "));
+  Serial.print(targetPressure);
+  Serial.println();
   
   // If there is no active session but we should start one, then let's do it
   if (!hasActiveSession && (adjustmentRequired > 0.5 || adjustmentRequired < -0.5)) {
@@ -229,6 +263,7 @@ void loop()
     // TODO: Add logic to adjust the inflation time based on an estimation from previous inflation runs for this connection
     float inflationTime = initialInflationTime;
     hasActiveSession = true;
+    Serial.print(F("The required"));
     inflate(inflationTime);
   }
   else if (adjustmentRequired < (-1 * accuracyTolerance))
@@ -243,15 +278,14 @@ void loop()
     // The target pressure has been reached
     if (hasActiveSession) {
       targetPressureAchieved();
-      hasActiveSession = false;
     }
-    
+    Serial.println(F("Tyre is at set pressure"));
     isAtSetPressure = true;
   }
 
   myGLCD.update();
 
-  delay(100);
+  
 
   // debugSensor();
 }
