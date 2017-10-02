@@ -66,6 +66,7 @@ const float tyreConnectionMinPsi = 3.0;
 LCD5110 myGLCD(DIG_LCD_SCK, DIG_LCD_MOSI, DIG_LCD_DC, DIG_LCD_RST, DIG_LCD_CS);
 
 extern uint8_t SmallFont[];
+extern uint8_t MediumNumbers[];
 extern uint8_t BigNumbers[];
 
 // Indicates the tolerance between the target pressure and the actual pressure
@@ -89,7 +90,7 @@ boolean isAtSetPressure = false;
 // The target set pressure of the tyre
 float targetPressure = 38;
 // An collection of the pressure readings of a session, maximum of 20
-float sessionReadings[20] = {};
+float sessionReadings[21] = {};
 // A record of how many inflation/deflation cycles were made
 int sessionCycles = 0;
 
@@ -122,6 +123,15 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_A), buttonAClicked, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_B), buttonBClicked, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_C), buttonCClicked, CHANGE);
+
+  welcome();
+}
+
+void welcome() {
+  myGLCD.clrScr();
+  myGLCD.print("AIRAUTO", CENTER, 10);
+  myGLCD.update();
+  delay(1000);
 }
 
 /*
@@ -201,6 +211,8 @@ void operationError(int errorCode)
   
   myGLCD.clrScr();
   myGLCD.print("ERROR!", CENTER, 10);
+  myGLCD.print("CODE", CENTER, 20);
+  myGLCD.printNumI(errorCode, CENTER, 30);
   myGLCD.update();
 
   for (int i = 0; i < 5; i++)
@@ -242,6 +254,20 @@ void targetPressureAchieved() {
     hasActiveSession = false;
     resetSessionReadings();
     Serial.println(F("SESSION Complete: Target pressure achieved."));
+    myGLCD.clrScr();
+    myGLCD.setFont(SmallFont);
+    myGLCD.print("COMPLETED", CENTER, 5);
+    myGLCD.setFont(BigNumbers);
+    myGLCD.printNumF(targetPressure, 0, CENTER, 20);
+    myGLCD.update();
+    for (int i = 0; i < 10; i++)
+    {
+      myGLCD.invert(true);
+      delay(250);
+      myGLCD.invert(false);
+      delay(250);
+    }
+    delay(2000);
   // TODO: Play beeps?
   // TODO: Flash message on screen?
 }
@@ -282,6 +308,8 @@ void addSessionReading(float value) {
 
 void loop()
 {
+  myGLCD.clrScr();
+  
   Serial.println(F("---------------------------------------------------------"));
   delay(500);
 
@@ -290,7 +318,7 @@ void loop()
 
   if (!isSwitchedOn) {
     Serial.println(F("Unit is not switched on, let's do nothing for now"));
-    return;
+    // return;
   }
 
 //  // We are able to attempt to reach the target pressure with no issues
@@ -306,7 +334,27 @@ void loop()
   Serial.print(detectTyre);
   Serial.println();
 
-  // hasTyreConnected
+  Serial.print(F("TARGET PSI: "));
+  Serial.print(targetPressure);
+  Serial.println();
+
+
+  myGLCD.setFont(SmallFont);
+  myGLCD.print("READ", 0, 13);
+  myGLCD.print("SET", 40, 13);
+
+//  myGLCD.drawLine(0, 18, 30, 18);
+//  myGLCD.drawLine(40, 18, 84, 18);
+  
+  myGLCD.setFont(BigNumbers);
+  if (detectTyre) {
+    myGLCD.printNumF(currentPsi, 0, 0, 24);
+  } else {
+    // myGLCD.printNumF(currentPsi, 0, 0, 10);
+  }
+  myGLCD.printNumF(targetPressure, 0, 42, 24);
+  myGLCD.setFont(SmallFont);
+  myGLCD.update();
 
   if (!detectTyre) {
     Serial.println(F("No tyre detcted"));
@@ -322,16 +370,12 @@ void loop()
   // positive number means we need to inflate (eg target of 38 and current of 22 gives us 16)
   float adjustmentRequired = (targetPressure - currentPsi);
 
-  Serial.print(F("TARGET PSI: "));
-  Serial.print(targetPressure);
-  Serial.println();
-
   Serial.print(F("ADJUSTMENT PSI: "));
   Serial.print(adjustmentRequired);
   Serial.println();
   
   // If there is no active session but we should start one, then let's do it
-  if (!hasActiveSession && (adjustmentRequired > 0.5 || adjustmentRequired < -0.5)) {
+  if (!hasActiveSession && detectTyre && (adjustmentRequired > 0.5 || adjustmentRequired < -0.5)) {
     sessionStart();
   }
 
@@ -340,7 +384,6 @@ void loop()
     // TODO: Add logic to adjust the inflation time based on an estimation from previous inflation runs for this connection
     float inflationTime = initialInflationTime;
     hasActiveSession = true;
-    Serial.print(F("The required"));
     addSessionReading(currentPsi);
     inflate(inflationTime);
   }
