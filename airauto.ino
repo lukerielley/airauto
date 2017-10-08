@@ -26,6 +26,30 @@ class Valve {
   }
 };
 
+class Session {
+
+  float current;
+  float target;
+
+  public:
+  Session(float currentPsi, float targetPsi) {
+   current = currentPsi;
+   target = targetPsi; 
+  }
+
+  void Start() {
+    
+  }
+
+  void End() {
+    
+  }
+
+  void AddCycle(float reading) {
+    
+  }
+};
+
 // Mega2560 Interrupt Pins = 2, 3, 18, 19, 20, 21
 
 // The PINS the 5110 LCD is connected to
@@ -44,6 +68,8 @@ Valve deflationValve(RELAY_DEFLATE);
 const byte PIN_BUTTON_A = 2;
 const byte PIN_BUTTON_B = 3;
 const byte PIN_BUTTON_C = 4;
+
+const byte PIN_BUZZER = 36;
 
 // The states for the buttons. These are volatile as they are modified by an interrupt
 volatile int BTN_A_STATE = 0;
@@ -76,9 +102,9 @@ boolean isInflating = false;
 // Indicates that the unit is deflating the tyre to reach the desired pressure, and that the ventilation valve is open
 boolean isDeflating = false;
 // Indicates that the unit has been told by the user that they want to achieve the target air pressure. It has been 'switched on'.
-boolean isSwitchedOn = true;
+volatile boolean isSwitchedOn = false;
 // Indicates that an inflation/deflation session has started
-boolean hasActiveSession = false;
+volatile boolean hasActiveSession = false;
 // Indicates that the unit detcts that it is connected to a tyre. This is generally done by detecting a pressure above a certain level.
 boolean hasTyreConnected = false;
 // Indicates that inflating/deflating was attempted, but failed. (The pressure didn't change, indicating a problem with the compressor, a connection, or the tyre)
@@ -88,7 +114,7 @@ boolean isPressureReadingErratic = false;
 // Indicates that the tyre is at the set pressure
 boolean isAtSetPressure = false;
 // The target set pressure of the tyre
-float targetPressure = 38;
+volatile float targetPressure = 38;
 // An collection of the pressure readings of a session, maximum of 20
 float sessionReadings[21] = {};
 // A record of how many inflation/deflation cycles were made
@@ -110,6 +136,7 @@ void setup()
   // Configure the I/O status of the pins we will use
   pinMode(RELAY_INFLATE, OUTPUT);
   pinMode(RELAY_DEFLATE, OUTPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
 
   // Set default states (both air solenoids closed
   inflationValve.Close();
@@ -120,9 +147,9 @@ void setup()
   pinMode(PIN_BUTTON_C, INPUT_PULLUP);
 
   // Register interrupt event handlers
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_A), buttonAClicked, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_B), buttonBClicked, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_C), buttonCClicked, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_A), buttonAClicked, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_B), buttonBClicked, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_BUTTON_C), buttonCClicked, FALLING);
 
   welcome();
 }
@@ -138,16 +165,31 @@ void welcome() {
   Interrupt event handler for button A
 */
 void buttonAClicked() {
-  BTN_A_STATE = digitalRead(PIN_BUTTON_A);
-  Serial.println(F("BUTTON A CHANGED"));
+   static unsigned long last_interrupt_time = 0;
+   unsigned long interrupt_time = millis();
+   // If interrupts come faster than 50ms, assume it's a bounce and ignore
+   if (interrupt_time - last_interrupt_time > 200) 
+   {
+     BTN_A_STATE = digitalRead(PIN_BUTTON_A);
+     Serial.println(F("BUTTON A CHANGED"));
+     isSwitchedOn = !isSwitchedOn;
+   }
+   last_interrupt_time = interrupt_time;
 }
 
 /*
   Interrupt event handler for button B
 */
 void buttonBClicked() {
-  BTN_B_STATE = digitalRead(PIN_BUTTON_B);
-  Serial.println(F("BUTTON B CHANGED"));
+   static unsigned long last_interrupt_time = 0;
+   unsigned long interrupt_time = millis();
+   // If interrupts come faster than 50ms, assume it's a bounce and ignore
+   if (interrupt_time - last_interrupt_time > 200) 
+   {
+     BTN_B_STATE = digitalRead(PIN_BUTTON_B);
+     Serial.println(F("BUTTON B CHANGED"));
+   }
+   last_interrupt_time = interrupt_time;
 }
 
 void buttonCClicked() {
@@ -230,7 +272,17 @@ void inflate(int time)
   Serial.println(F("Opening inflation solenoid"));
   inflationValve.Open();
   Serial.println(F("Inflating"));
-  delay(time);
+  for(int count = 0; count < 10; count++) {
+    if (!isSwitchedOn) {
+      break;
+    }
+    int x = 2 + (count * 8);
+    myGLCD.drawLine(x, 0, x, 10); // Vertical left side
+    myGLCD.drawLine(x, 0, x + 8, 5); // Top left to middle right
+    myGLCD.drawLine(x, 10, x + 8, 5); // Bottom left to middle right
+    myGLCD.update();
+    delay(100);
+  }
   Serial.println(F("Closing inflation solenoid"));
   inflationValve.Close();
   delay(1000);
@@ -243,7 +295,17 @@ void deflate(int time)
   Serial.println(F("Opening deflation solenoid"));
   deflationValve.Open();
   Serial.println(F("Deflating"));
-  delay(time);
+  for(int count = 9; count >= 0; count--) {
+    if (!isSwitchedOn) {
+      break;
+    }
+    int x = 2 + (count * 8);
+    myGLCD.drawLine(x + 8, 0, x + 8, 10); // Vertical right side
+    myGLCD.drawLine(x + 8, 0, x, 5); // Top right to middle left
+    myGLCD.drawLine(x + 8, 10, x, 5); // Bottom right to middle left
+    myGLCD.update();
+    delay(100);
+  }
   Serial.println(F("Closing deflation solenoid"));
   deflationValve.Close();
   delay(1000);
@@ -251,8 +313,9 @@ void deflate(int time)
 }
 
 void targetPressureAchieved() {
+
     hasActiveSession = false;
-    resetSessionReadings();
+    
     Serial.println(F("SESSION Complete: Target pressure achieved."));
     myGLCD.clrScr();
     myGLCD.setFont(SmallFont);
@@ -260,16 +323,40 @@ void targetPressureAchieved() {
     myGLCD.setFont(BigNumbers);
     myGLCD.printNumF(targetPressure, 0, CENTER, 20);
     myGLCD.update();
-    for (int i = 0; i < 10; i++)
+    for (int i = 0; i < 3; i++)
     {
+      digitalWrite(PIN_BUZZER, HIGH);
       myGLCD.invert(true);
-      delay(250);
+      delay(500);
+      digitalWrite(PIN_BUZZER, LOW);
       myGLCD.invert(false);
-      delay(250);
+      delay(500);
     }
     delay(2000);
   // TODO: Play beeps?
   // TODO: Flash message on screen?
+}
+
+void tyreDisconnectedDuringSession() {
+  // Tyre has been disconnected! Let's end the session
+  hasActiveSession = false;
+  Serial.println(F("SESSION END!! There was an active session but the tyre was disconnected!"));
+  myGLCD.clrScr();
+  myGLCD.setFont(SmallFont);
+  myGLCD.print("TYRE", CENTER, 15);
+  myGLCD.print("DISCONNECTED!", CENTER, 30);
+  myGLCD.update();
+  digitalWrite(PIN_BUZZER, HIGH);
+  for (int i = 0; i < 3; i++)
+  {
+    myGLCD.invert(true);
+    delay(250);
+    myGLCD.invert(false);
+    delay(250);
+  }
+  digitalWrite(PIN_BUZZER, LOW);
+  delay(2000);
+  myGLCD.update();
 }
 
 void sessionStart() {
@@ -309,16 +396,31 @@ void addSessionReading(float value) {
 void loop()
 {
   myGLCD.clrScr();
+  myGLCD.setFont(SmallFont);
   
   Serial.println(F("---------------------------------------------------------"));
   delay(500);
+
+  Serial.print("BTN A: ");
+  Serial.print(BTN_A_STATE);
+  Serial.print(", BTN B: ");
+  Serial.print(BTN_B_STATE);
+  Serial.print(", BTN C: ");
+  Serial.print(BTN_C_STATE);
+  Serial.println();
 
   // Read the current pressure
   float currentPsi = getCurrentPsi();
 
   if (!isSwitchedOn) {
-    Serial.println(F("Unit is not switched on, let's do nothing for now"));
-    // return;
+    if (hasActiveSession) {
+      Serial.println("Active ession ended");
+      hasActiveSession = false;
+    } else {
+      Serial.println(F("Unit is not switched on, let's do nothing for now"));
+    }
+  } else {
+    // myGLCD.print("ACTIVE", CENTER, 0);
   }
 
 //  // We are able to attempt to reach the target pressure with no issues
@@ -328,86 +430,80 @@ void loop()
 //  }
 
   // Determine if we have a tyre connected based on the pressure reading
-  boolean detectTyre = (currentPsi > tyreConnectionMinPsi );
+  hasTyreConnected = (currentPsi > tyreConnectionMinPsi );
 
   Serial.print(F("TYRE DETECTION: "));
-  Serial.print(detectTyre);
+  Serial.print(hasTyreConnected);
   Serial.println();
 
   Serial.print(F("TARGET PSI: "));
   Serial.print(targetPressure);
   Serial.println();
-
-
-  myGLCD.setFont(SmallFont);
-  myGLCD.print("READ", 0, 13);
-  myGLCD.print("SET", 40, 13);
-
-//  myGLCD.drawLine(0, 18, 30, 18);
-//  myGLCD.drawLine(40, 18, 84, 18);
   
+  myGLCD.print("READ", 0, 16);
+  myGLCD.print("TARGET", 40, 16);
+
   myGLCD.setFont(BigNumbers);
-  if (detectTyre) {
+  if (hasTyreConnected) {
     myGLCD.printNumF(currentPsi, 0, 0, 24);
   } else {
-    // myGLCD.printNumF(currentPsi, 0, 0, 10);
+    myGLCD.drawRect(0, 24, 20, 40);
   }
   myGLCD.printNumF(targetPressure, 0, 42, 24);
   myGLCD.setFont(SmallFont);
   myGLCD.update();
 
-  if (!detectTyre) {
+  if (!hasTyreConnected) {
     Serial.println(F("No tyre detcted"));
     // No tyre detected
     if (hasActiveSession) {
-      // Tyre has been disconnected! Let's end the session
-      hasActiveSession = false;
-      Serial.println(F("SESSION END!! There was an active session but the tyre was disconnected!"));
+      tyreDisconnectedDuringSession();
     }
     return;
   }
 
   // positive number means we need to inflate (eg target of 38 and current of 22 gives us 16)
   float adjustmentRequired = (targetPressure - currentPsi);
+  // Determine if we are at the set pressure (within the tolerance bounds)
+  isAtSetPressure = (adjustmentRequired < accuracyTolerance && adjustmentRequired > (-1 * accuracyTolerance));
 
   Serial.print(F("ADJUSTMENT PSI: "));
   Serial.print(adjustmentRequired);
   Serial.println();
-  
-  // If there is no active session but we should start one, then let's do it
-  if (!hasActiveSession && detectTyre && (adjustmentRequired > 0.5 || adjustmentRequired < -0.5)) {
-    sessionStart();
-  }
 
-  if (adjustmentRequired > accuracyTolerance)
-  {
-    // TODO: Add logic to adjust the inflation time based on an estimation from previous inflation runs for this connection
-    float inflationTime = initialInflationTime;
-    hasActiveSession = true;
-    addSessionReading(currentPsi);
-    inflate(inflationTime);
-  }
-  else if (adjustmentRequired < (-1 * accuracyTolerance))
-  {
-    // TODO: Add logic to adjust the inflation time based on an estimation from previous deflation runs for this connection
-    float deflationTime = initialDeflationTime;
-    hasActiveSession = true;
-    addSessionReading(currentPsi);
-    deflate(deflationTime);
-  }
-  else
-  {
+  if (isAtSetPressure && hasActiveSession) {
     // The target pressure has been reached
     if (hasActiveSession) {
       targetPressureAchieved();
     }
     Serial.println(F("Tyre is at set pressure"));
-    isAtSetPressure = true;
+  }
+  
+  // If there is no active session but we should start one, then let's do it
+  if (isSwitchedOn && hasTyreConnected && !isAtSetPressure) {
+
+    if (!hasActiveSession) {
+      sessionStart();
+    }
+
+    if (adjustmentRequired > accuracyTolerance)
+    {
+      // TODO: Add logic to adjust the inflation time based on an estimation from previous inflation runs for this connection
+      float inflationTime = initialInflationTime;
+      hasActiveSession = true;
+      addSessionReading(currentPsi);
+      inflate(inflationTime);
+    }
+    else if (adjustmentRequired < (-1 * accuracyTolerance))
+    {
+      // TODO: Add logic to adjust the inflation time based on an estimation from previous deflation runs for this connection
+      float deflationTime = initialDeflationTime;
+      hasActiveSession = true;
+      addSessionReading(currentPsi);
+      deflate(deflationTime);
+    }
   }
 
   myGLCD.update();
 
-  
-
-  // debugSensor();
 }
